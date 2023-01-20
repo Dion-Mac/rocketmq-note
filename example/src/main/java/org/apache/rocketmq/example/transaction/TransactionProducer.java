@@ -30,7 +30,13 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * TransactionStatus.CommitTransaction: 提交事务，它允许消费者消费此消息。
+ * TransactionStatus.RollbackTransaction: 回滚事务，它代表该消息将被删除，不允许被消费。
+ * TransactionStatus.Unknown: 中间状态，它代表需要检查消息队列来确定状态。
+ */
 public class TransactionProducer {
+
     public static void main(String[] args) throws MQClientException, InterruptedException {
         TransactionListener transactionListener = new TransactionListenerImpl();
         TransactionMQProducer producer = new TransactionMQProducer("please_rename_unique_group_name");

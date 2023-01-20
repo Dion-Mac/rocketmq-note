@@ -29,6 +29,11 @@ import org.junit.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * MappedFile测试类  文件的创建，写入，读取，关闭，释放 清除 销毁
+ *
+ * 这个测试类很重要，可以跟着走完MappedFile的整个生命流程！！！
+ */
 public class MappedFileTest {
     private final String storeMessage = "Once, there was a chance for me!";
 

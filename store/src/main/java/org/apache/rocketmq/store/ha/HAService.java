@@ -250,6 +250,7 @@ public class HAService {
 
     /**
      * GroupTransferService Service
+     * 负责主从同步负责结束通知由于等待HA同步结果而阻塞的消息发送者线程，同步双写
      */
     class GroupTransferService extends ServiceThread {
 
@@ -272,6 +273,9 @@ public class HAService {
             this.notifyTransferObject.wakeup();
         }
 
+        /**
+         * 读写分离，也是一种常见写法
+         */
         private void swapRequests() {
             lock.lock();
             try {
@@ -283,11 +287,15 @@ public class HAService {
             }
         }
 
+        /**
+         * 核心业务逻辑
+         */
         private void doWaitTransfer() {
             if (!this.requestsRead.isEmpty()) {
                 for (CommitLog.GroupCommitRequest req : this.requestsRead) {
                     boolean transferOK = HAService.this.push2SlaveMaxOffset.get() >= req.getNextOffset();
                     long deadLine = req.getDeadLine();
+                    // deadLine之前，每间隔1秒查询一次，直到成功  默认超时时间，3秒
                     while (!transferOK && deadLine - System.nanoTime() > 0) {
                         this.notifyTransferObject.waitForRunning(1000);
                         transferOK = HAService.this.push2SlaveMaxOffset.get() >= req.getNextOffset();
@@ -327,6 +335,9 @@ public class HAService {
     }
 
     class HAClient extends ServiceThread {
+        /**
+         * socket读缓存区大小 4m
+         */
         private static final int READ_MAX_BUFFER_SIZE = 1024 * 1024 * 4;
         private final AtomicReference<String> masterAddress = new AtomicReference<>();
         private final ByteBuffer reportOffset = ByteBuffer.allocate(8);
@@ -336,6 +347,9 @@ public class HAService {
 
         private long currentReportedOffset = 0;
         private int dispatchPosition = 0;
+        /**
+         * 读写缓冲区 默认情况下，HAConnection一次最多只会写入32k加msgHeader的数据，这里用4m的缓存区来接受，是不是有点浪费？
+         */
         private ByteBuffer byteBufferRead = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
         private ByteBuffer byteBufferBackup = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
 
@@ -366,7 +380,10 @@ public class HAService {
             this.reportOffset.putLong(maxOffset);
             this.reportOffset.position(0);
             this.reportOffset.limit(8);
+            // 这里是手动切换到读模式，其实可以直接调用
+            // this.reportOffset.flip();
 
+            // 这里需要重试是因为nio是一个非阻塞io，调用一次write方法不一定会将ByteBuffer的可读字节全部写入
             for (int i = 0; i < 3 && this.reportOffset.hasRemaining(); i++) {
                 try {
                     this.socketChannel.write(this.reportOffset);
@@ -378,7 +395,7 @@ public class HAService {
             }
 
             lastWriteTimestamp = HAService.this.defaultMessageStore.getSystemClock().now();
-            return !this.reportOffset.hasRemaining();
+            return !this.reportOffset.hasRemaining();// 如果没有可读字节，则已经发送成功
         }
 
         private void reallocateByteBuffer() {
@@ -433,6 +450,10 @@ public class HAService {
             return true;
         }
 
+        /**
+         * 从这个代码来看，现在主从同步传输的数据格式似乎有点迷！？
+         * @return
+         */
         private boolean dispatchReadRequest() {
             final int msgHeaderSize = 8 + 4; // phyoffset + size
 
@@ -443,7 +464,9 @@ public class HAService {
                     int bodySize = this.byteBufferRead.getInt(this.dispatchPosition + 8);
 
                     long slavePhyOffset = HAService.this.defaultMessageStore.getMaxPhyOffset();
-
+                    /**
+                     * 检查offset是否一致
+                     */
                     if (slavePhyOffset != 0) {
                         if (slavePhyOffset != masterPhyOffset) {
                             log.error("master pushed offset not equal the max phy offset in slave, SLAVE: "
@@ -452,6 +475,7 @@ public class HAService {
                         }
                     }
 
+                    // 判断
                     if (diff >= (msgHeaderSize + bodySize)) {
                         byte[] bodyData = byteBufferRead.array();
                         int dataStart = this.dispatchPosition + msgHeaderSize;
@@ -468,7 +492,7 @@ public class HAService {
                         continue;
                     }
                 }
-
+                //缓冲区数据已经读完
                 if (!this.byteBufferRead.hasRemaining()) {
                     this.reallocateByteBuffer();
                 }

@@ -90,6 +90,11 @@ public class IndexService {
     public void deleteExpiredFile(long offset) {
         Object[] files = null;
         try {
+            /**
+             * 为什么这里要用 readLock?起到了什么作用？
+             * 如果能够加锁成功，证明此时没有在写文件
+             * 读读共享，读写互斥，谢谢互斥
+             */
             this.readWriteLock.readLock().lock();
             if (this.indexFileList.isEmpty()) {
                 return;
@@ -123,6 +128,10 @@ public class IndexService {
     private void deleteExpiredFile(List<IndexFile> files) {
         if (!files.isEmpty()) {
             try {
+                /**
+                 * 为什么这里要用 writeLock?起到了什么作用？
+                 * 开始执行要删除文件了，要独占  同时删除的时候不能再读  分爱两个方法写，粒度控制得更好，并发度更高
+                 */
                 this.readWriteLock.writeLock().lock();
                 for (IndexFile file : files) {
                     boolean destroyed = file.destroy(3000);

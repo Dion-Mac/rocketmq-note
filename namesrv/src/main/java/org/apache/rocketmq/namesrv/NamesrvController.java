@@ -74,7 +74,7 @@ public class NamesrvController {
     }
 
     public boolean initialize() {
-
+        // TODO 加载KV配置，创建NettyServer网络处理对象
         this.kvConfigManager.load();
 
         this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.brokerHousekeepingService);
@@ -84,9 +84,11 @@ public class NamesrvController {
 
         this.registerProcessor();
 
+        //创建两个定时任务，在RocketMQ中统称为心跳检测
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
+            //TODO NameServer每隔10s扫描一次Broker,移除处于不激活状态的Broker
             public void run() {
                 NamesrvController.this.routeInfoManager.scanNotActiveBroker();
             }
@@ -95,6 +97,7 @@ public class NamesrvController {
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
+            //TODO NameServer每隔10min打印一次KV配置
             public void run() {
                 NamesrvController.this.kvConfigManager.printAllPeriodically();
             }

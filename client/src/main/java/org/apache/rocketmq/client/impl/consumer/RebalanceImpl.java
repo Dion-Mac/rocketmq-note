@@ -256,7 +256,9 @@ public abstract class RebalanceImpl {
                 break;
             }
             case CLUSTERING: {
+                // 获取topic对应的主题信息
                 Set<MessageQueue> mqSet = this.topicSubscribeInfoTable.get(topic);
+                // 获取消费组内所有的客户端id
                 List<String> cidAll = this.mQClientFactory.findConsumerIdList(topic, consumerGroup);
                 if (null == mqSet) {
                     if (!topic.startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
@@ -267,11 +269,11 @@ public abstract class RebalanceImpl {
                 if (null == cidAll) {
                     log.warn("doRebalance, {} {}, get consumer id list failed", consumerGroup, topic);
                 }
-
+                // mqSet和cidAll两者缺一不可
                 if (mqSet != null && cidAll != null) {
                     List<MessageQueue> mqAll = new ArrayList<MessageQueue>();
                     mqAll.addAll(mqSet);
-
+                    // 排序，保证同一个消费组内的顺序是一致的
                     Collections.sort(mqAll);
                     Collections.sort(cidAll);
 
@@ -337,8 +339,8 @@ public abstract class RebalanceImpl {
             ProcessQueue pq = next.getValue();
 
             if (mq.getTopic().equals(topic)) {
-                if (!mqSet.contains(mq)) {
-                    pq.setDropped(true);
+                if (!mqSet.contains(mq)) { // 根据最新的分配结果，移除不属于该消费者的ProcessQueue
+                    pq.setDropped(true);// ProcessQueue中的消息不会再消费
                     if (this.removeUnnecessaryMessageQueue(mq, pq)) {
                         it.remove();
                         changed = true;

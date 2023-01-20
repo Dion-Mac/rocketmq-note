@@ -29,13 +29,15 @@ import org.apache.rocketmq.common.protocol.heartbeat.MessageModel;
 public class PushConsumer {
 
     public static void main(String[] args) throws InterruptedException, MQClientException {
-        DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("please_rename_unique_group_name_1");
+        DefaultMQPushConsumer consumer = new DefaultMQPushConsumer("PushConsumer");
 
+        consumer.setNamesrvAddr("182.61.6.159:9876");
         consumer.setConsumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET);
 
         consumer.setMessageModel(MessageModel.BROADCASTING);
 
-        consumer.subscribe("TopicTest", "TagA || TagC || TagD");
+//        consumer.subscribe("BatchTest", "TagA || TagC || TagD");
+        consumer.subscribe("TagFilterTest", "TagA || TagC || TagD");
 
         consumer.registerMessageListener(new MessageListenerConcurrently() {
 

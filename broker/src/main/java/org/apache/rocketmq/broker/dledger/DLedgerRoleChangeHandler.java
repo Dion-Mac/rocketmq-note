@@ -54,14 +54,28 @@ public class DLedgerRoleChangeHandler implements DLedgerLeaderElector.RoleChange
                     boolean succ = true;
                     log.info("Begin handling broker role change term={} role={} currStoreRole={}", term, role, messageStore.getMessageStoreConfig().getBrokerRole());
                     switch (role) {
+                        /**
+                         * 如果当前节点状态机状态为 CANDIDATE，表示正在发起 Leader 节点，如果该服务器的角色不是 SLAVE 的话，需要将状态切换为 SLAVE
+                         */
                         case CANDIDATE:
                             if (messageStore.getMessageStoreConfig().getBrokerRole() != BrokerRole.SLAVE) {
                                 brokerController.changeToSlave(dLedgerCommitLog.getId());
                             }
                             break;
+                        /**
+                         * 如果当前节点状态机状态为 FOLLOWER，broker 节点将转换为 从节点
+                         */
                         case FOLLOWER:
                             brokerController.changeToSlave(dLedgerCommitLog.getId());
                             break;
+                        /**
+                         * 如果当前节点状态机状态为 Leader，说明该节点被选举为 Leader，在切换到 Master 节点之前，首先需要等待当前节点追加的数据都已经被提交后才可以将状态变更为 Master，其关键实现如下：
+                         *
+                         * 如果 ledgerEndIndex 为 -1，表示当前节点还未又数据转发，直接跳出循环，无需等待。
+                         * 如果 ledgerEndIndex 不为 -1 ，则必须等待数据都已提交，即 ledgerEndIndex 与 committedIndex 相等。
+                         * 并且需要等待 commitlog 日志全部已转发到 consumequeue中，即 ReputMessageService 中的 reputFromOffset 与 commitlog 的 maxOffset 相等。
+                         * 等待上述条件满足后，即可以进行状态的变更，需要恢复 ConsumeQueue，维护每一个 queue 对应的 maxOffset，然后将 broker 角色转变为 master
+                         */
                         case LEADER:
                             while (true) {
                                 if (!dLegerServer.getMemberState().isLeader()) {

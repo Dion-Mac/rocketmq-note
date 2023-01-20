@@ -49,6 +49,11 @@ public class Consumer {
          * </pre>
          */
 
+        /**
+         * 为consumer指定一个name server,用分号隔开多个地址
+         */
+        consumer.setNamesrvAddr("182.61.6.159:9876");
+
         /*
          * Specify where to start in case the specific consumer group is a brand-new one.
          */
@@ -56,8 +61,9 @@ public class Consumer {
 
         /*
          * Subscribe one more topic to consume.
+         * 是否可以退订？ --可以unsubscribe方法
          */
-        consumer.subscribe("TopicTest", "*");
+        consumer.subscribe("TopicTest1", "*");
 
         /*
          *  Register callback to execute on arrival of messages fetched from brokers.

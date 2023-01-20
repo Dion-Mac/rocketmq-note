@@ -28,6 +28,11 @@ import org.apache.rocketmq.store.config.MessageStoreConfig;
 import org.apache.rocketmq.store.util.LibC;
 import sun.nio.ch.DirectBuffer;
 
+/**
+ * 短暂的存储池
+ * 使用直接内存
+ * 作用:提高存储性能
+ */
 public class TransientStorePool {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
@@ -40,11 +45,18 @@ public class TransientStorePool {
         this.storeConfig = storeConfig;
         this.poolSize = storeConfig.getTransientStorePoolSize();
         this.fileSize = storeConfig.getMappedFileSizeCommitLog();
-        this.availableBuffers = new ConcurrentLinkedDeque<>();
+        this.availableBuffers = new ConcurrentLinkedDeque<>();// 双端队列
     }
 
     /**
      * It's a heavy init method.
+     * 如果开启，默认分配5g的堆外内存，而且是锁定了（避免进程将内存交换到磁盘）,果然够重
+     * 性能提升很大？什么情况下才要启动这个参数?如果要启动，要做好内存规划
+     *
+     * 该内存池的内存实际上用的也是直接内存，把要存储的数据先存入该buffer中，然后需要刷盘的时候，将该buffer的数据传入FileChannel，
+     * 这样就和MappedByteBuffer一样能做到零拷贝了
+     *
+     * 除此之外，该Buffer使用了com.sun.jna.Library类库将该批内存锁定，避免被置换到交换区，提高存储性能
      */
     public void init() {
         for (int i = 0; i < poolSize; i++) {
@@ -52,6 +64,7 @@ public class TransientStorePool {
 
             final long address = ((DirectBuffer) byteBuffer).address();
             Pointer pointer = new Pointer(address);
+            // 内存锁定
             LibC.INSTANCE.mlock(pointer, new NativeLong(fileSize));
 
             availableBuffers.offer(byteBuffer);
@@ -66,12 +79,18 @@ public class TransientStorePool {
         }
     }
 
+    /**
+     * 归还buffer
+     */
     public void returnBuffer(ByteBuffer byteBuffer) {
         byteBuffer.position(0);
         byteBuffer.limit(fileSize);
         this.availableBuffers.offerFirst(byteBuffer);
     }
 
+    /**
+     * 借用buffer
+     */
     public ByteBuffer borrowBuffer() {
         ByteBuffer buffer = availableBuffers.pollFirst();
         if (availableBuffers.size() < poolSize * 0.4) {

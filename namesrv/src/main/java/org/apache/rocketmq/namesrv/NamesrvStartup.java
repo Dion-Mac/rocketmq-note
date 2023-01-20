@@ -25,6 +25,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
 import java.util.concurrent.Callable;
+
+import com.sun.xml.internal.bind.v2.TODO;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
@@ -48,7 +50,9 @@ public class NamesrvStartup {
     private static CommandLine commandLine = null;
 
     public static void main(String[] args) {
+        long start = System.currentTimeMillis();
         main0(args);
+        System.out.println(System.currentTimeMillis() - start);
     }
 
     public static NamesrvController main0(String[] args) {
@@ -78,7 +82,8 @@ public class NamesrvStartup {
             System.exit(-1);
             return null;
         }
-
+        // TODO nameServer启动第一步：解析配置文件，
+        //  填充NameServerConfig 、NettyServerConfig属性值
         final NamesrvConfig namesrvConfig = new NamesrvConfig();
         final NettyServerConfig nettyServerConfig = new NettyServerConfig();
         nettyServerConfig.setListenPort(9876);
@@ -123,6 +128,8 @@ public class NamesrvStartup {
         MixAll.printObjectProperties(log, namesrvConfig);
         MixAll.printObjectProperties(log, nettyServerConfig);
 
+        // TODO nameServer启动第二步：根据启动属性创建nameSrvController实例，
+        //  并初始化该实例
         final NamesrvController controller = new NamesrvController(namesrvConfig, nettyServerConfig);
 
         // remember all configs to prevent discard
@@ -136,13 +143,15 @@ public class NamesrvStartup {
         if (null == controller) {
             throw new IllegalArgumentException("NamesrvController is null");
         }
-
+        // TODO 初始化nameSrvController
         boolean initResult = controller.initialize();
         if (!initResult) {
             controller.shutdown();
             System.exit(-3);
         }
-
+        //TODO nameServer启动第三步：注册JVM钩子函数并启动服务器，以便监听Broker 、消息生产者的网络请求。
+        // 如果代码中使用了线程池，一种优雅停机的方式就是注册一个JVM钩子函数，
+        // 在JVM 进程关闭之前，先将线程池关闭，及时释放资源。
         Runtime.getRuntime().addShutdownHook(new ShutdownHookThread(log, new Callable<Void>() {
             @Override
             public Void call() throws Exception {

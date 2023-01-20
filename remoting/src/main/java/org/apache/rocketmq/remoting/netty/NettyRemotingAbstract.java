@@ -152,11 +152,14 @@ public abstract class NettyRemotingAbstract {
      */
     public void processMessageReceived(ChannelHandlerContext ctx, RemotingCommand msg) throws Exception {
         final RemotingCommand cmd = msg;
+        //如果远程调用的命令不为空，则进行处理
         if (cmd != null) {
             switch (cmd.getType()) {
+                //请求类型的命令
                 case REQUEST_COMMAND:
                     processRequestCommand(ctx, cmd);
                     break;
+                //响应类型的命令
                 case RESPONSE_COMMAND:
                     processResponseCommand(ctx, cmd);
                     break;
@@ -190,21 +193,31 @@ public abstract class NettyRemotingAbstract {
      * @param cmd request command.
      */
     public void processRequestCommand(final ChannelHandlerContext ctx, final RemotingCommand cmd) {
+        //根据code拿到对应的处理类和线程池，没有则赋予默认的
         final Pair<NettyRequestProcessor, ExecutorService> matched = this.processorTable.get(cmd.getCode());
         final Pair<NettyRequestProcessor, ExecutorService> pair = null == matched ? this.defaultRequestProcessor : matched;
-        final int opaque = cmd.getOpaque();
+        final int opaque = cmd.getOpaque();// 获取请求id，每一个RemotingCommand创建的时候就会生成，就是一个线程安全的计数器累加
 
         if (pair != null) {
+            //处理请求的处理线程逻辑
             Runnable run = new Runnable() {
                 @Override
                 public void run() {
                     try {
                         String remoteAddr = RemotingHelper.parseChannelRemoteAddr(ctx.channel());
+                        //执行前调用实现了RPCHook接口的扩展实现逻辑
                         doBeforeRpcHooks(remoteAddr, cmd);
+
+                        /**
+                         * RemotingResponseCallback 全局只有这一个匿名内部类的实现，
+                         * 这里是在定义处理完请求之后返回信息的处理逻辑
+                         */
                         final RemotingResponseCallback callback = new RemotingResponseCallback() {
                             @Override
                             public void callback(RemotingCommand response) {
+                                //执行调用的扩展方法逻辑
                                 doAfterRpcHooks(remoteAddr, cmd, response);
+                                //如果是有返回的调用，则进一步处理返回逻辑，然后返回
                                 if (!cmd.isOnewayRPC()) {
                                     if (response != null) {
                                         response.setOpaque(opaque);
@@ -221,13 +234,16 @@ public abstract class NettyRemotingAbstract {
                                 }
                             }
                         };
+                        //如果是异步的请求的处理逻辑，使用的是CompletableFuture来实现
                         if (pair.getObject1() instanceof AsyncNettyRequestProcessor) {
                             AsyncNettyRequestProcessor processor = (AsyncNettyRequestProcessor)pair.getObject1();
                             processor.asyncProcessRequest(ctx, cmd, callback);
                         } else {
+                            //同步处理的逻辑
                             NettyRequestProcessor processor = pair.getObject1();
+                            //调用对应的请求处理器进行处理
                             RemotingCommand response = processor.processRequest(ctx, cmd);
-                            callback.callback(response);
+                            callback.callback(response);//其实这里这么处理，效果是一致的，都是有处理回调
                         }
                     } catch (Throwable e) {
                         log.error("process request exception", e);
@@ -243,6 +259,7 @@ public abstract class NettyRemotingAbstract {
                 }
             };
 
+            // 先判断当前是否能正常处理请求，如果不能则直接返回系统繁忙
             if (pair.getObject1().rejectRequest()) {
                 final RemotingCommand response = RemotingCommand.createResponseCommand(RemotingSysResponseCode.SYSTEM_BUSY,
                     "[REJECTREQUEST]system busy, start flow control for a while");
@@ -252,7 +269,9 @@ public abstract class NettyRemotingAbstract {
             }
 
             try {
+                //创建线程任务对象RequestTask 实现的是runnable
                 final RequestTask requestTask = new RequestTask(run, ctx.channel(), cmd);
+                //丢到对应的线程池中处理
                 pair.getObject2().submit(requestTask);
             } catch (RejectedExecutionException e) {
                 if ((System.currentTimeMillis() % 10000) == 0) {
@@ -270,6 +289,9 @@ public abstract class NettyRemotingAbstract {
                 }
             }
         } else {
+            /**
+             * 如果请求码不存在对应的处理逻辑，则直接返回请求码不支持的错误
+             */
             String error = " request type " + cmd.getCode() + " not supported";
             final RemotingCommand response =
                 RemotingCommand.createResponseCommand(RemotingSysResponseCode.REQUEST_CODE_NOT_SUPPORTED, error);
@@ -414,6 +436,7 @@ public abstract class NettyRemotingAbstract {
             final ResponseFuture responseFuture = new ResponseFuture(channel, opaque, timeoutMillis, null, null);
             this.responseTable.put(opaque, responseFuture);
             final SocketAddress addr = channel.remoteAddress();
+            // 把请求写到channel里面，简单粗暴
             channel.writeAndFlush(request).addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture f) throws Exception {
@@ -456,6 +479,9 @@ public abstract class NettyRemotingAbstract {
         if (acquired) {
             final SemaphoreReleaseOnlyOnce once = new SemaphoreReleaseOnlyOnce(this.semaphoreAsync);
             long costTime = System.currentTimeMillis() - beginStartTime;
+            /**
+             * 可能刚刚好临界，所以这里需要再判断一次是否超时
+             */
             if (timeoutMillis < costTime) {
                 once.release();
                 throw new RemotingTimeoutException("invokeAsyncImpl call timeout");

@@ -81,6 +81,10 @@ public class MappedFileQueue {
         if (null == mfs)
             return null;
 
+        /**
+         * 从mappedFile列表中第一个文件开始查找，找到第一个最后一次更新时间大于待查时间戳的文件
+         * 如果不存在，则返回最后一个MappedFile文件
+         */
         for (int i = 0; i < mfs.length; i++) {
             MappedFile mappedFile = (MappedFile) mfs[i];
             if (mappedFile.getLastModifiedTimestamp() >= timestamp) {
@@ -299,6 +303,10 @@ public class MappedFileQueue {
         return true;
     }
 
+    /**
+     * 并不是直接返回0
+     * @return
+     */
     public long getMinOffset() {
 
         if (!this.mappedFiles.isEmpty()) {
@@ -313,6 +321,10 @@ public class MappedFileQueue {
         return -1;
     }
 
+    /**
+     * 获取存储文件的最大偏移量。返回最后一个MappedFile文件的fileFromOffset加上MappedFile文件当前的读指针
+     * @return
+     */
     public long getMaxOffset() {
         MappedFile mappedFile = getLastMappedFile();
         if (mappedFile != null) {
@@ -321,6 +333,10 @@ public class MappedFileQueue {
         return 0;
     }
 
+    /**
+     * 返回最后一个MappedFile文件的fileFromOffset加上MappedFile文件当前的写指针
+     * @return
+     */
     public long getMaxWrotePosition() {
         MappedFile mappedFile = getLastMappedFile();
         if (mappedFile != null) {
@@ -486,6 +502,10 @@ public class MappedFileQueue {
                         this.mappedFileSize,
                         this.mappedFiles.size());
                 } else {
+                    /**
+                     * RocketMQ采取定时删除存储文件的策略，
+                     * 也就是说在存储文件中，第一个文件不一定是00000000000000000000，因为该文件在某一时刻会被删除
+                     */
                     int index = (int) ((offset / this.mappedFileSize) - (firstMappedFile.getFileFromOffset() / this.mappedFileSize));
                     MappedFile targetFile = null;
                     try {

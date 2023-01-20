@@ -249,6 +249,7 @@ public class BrokerController {
 
         if (result) {
             try {
+                //创建DefaultMessageStore作为messageStore
                 this.messageStore =
                     new DefaultMessageStore(this.messageStoreConfig, this.brokerStatsManager, this.messageArrivingListener,
                         this.brokerConfig);
@@ -270,10 +271,13 @@ public class BrokerController {
         result = result && this.messageStore.load();
 
         if (result) {
+            // 这里启动了两个netty服务端，配置除了端口，其他都是一致的，为什么要这么做呢？
             this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.clientHousekeepingService);
+
             NettyServerConfig fastConfig = (NettyServerConfig) this.nettyServerConfig.clone();
             fastConfig.setListenPort(nettyServerConfig.getListenPort() - 2);
             this.fastRemotingServer = new NettyRemotingServer(fastConfig, this.clientHousekeepingService);
+
             this.sendMessageExecutor = new BrokerFixedThreadPoolExecutor(
                 this.brokerConfig.getSendMessageThreadPoolNums(),
                 this.brokerConfig.getSendMessageThreadPoolNums(),
@@ -562,12 +566,18 @@ public class BrokerController {
 
     public void registerProcessor() {
         /**
-         * SendMessageProcessor
+         * SendMessageProcessor 在这里注册的Processor，底层是用一个HashMap保存其对应关系
          */
         SendMessageProcessor sendProcessor = new SendMessageProcessor(this);
+        //注册发送消息的钩子方法，弄懂用来干嘛？
         sendProcessor.registerSendMessageHook(sendMessageHookList);
+        //注册消费消息的钩子方法，弄懂用来干嘛？
         sendProcessor.registerConsumeMessageHook(consumeMessageHookList);
-
+        /**
+         * SEND_MESSAGE（没经过压缩的消息）/ SEND_MESSAGE_V2（经过压缩的消息）
+         *
+         * registerProcessor利用remotingServer内部的一个hashmap保存时间，key为requestCode， value为一个pair对象，这个对象里维护了两个对象，一个是sendProcessor，一个是sendMessageExecutor
+         */
         this.remotingServer.registerProcessor(RequestCode.SEND_MESSAGE, sendProcessor, this.sendMessageExecutor);
         this.remotingServer.registerProcessor(RequestCode.SEND_MESSAGE_V2, sendProcessor, this.sendMessageExecutor);
         this.remotingServer.registerProcessor(RequestCode.SEND_BATCH_MESSAGE, sendProcessor, this.sendMessageExecutor);
@@ -577,7 +587,7 @@ public class BrokerController {
         this.fastRemotingServer.registerProcessor(RequestCode.SEND_BATCH_MESSAGE, sendProcessor, this.sendMessageExecutor);
         this.fastRemotingServer.registerProcessor(RequestCode.CONSUMER_SEND_MSG_BACK, sendProcessor, this.sendMessageExecutor);
         /**
-         * PullMessageProcessor
+         * PullMessageProcessor 这个是单独的，只有remotingServer能处理拉取消息
          */
         this.remotingServer.registerProcessor(RequestCode.PULL_MESSAGE, this.pullMessageProcessor, this.pullMessageExecutor);
         this.pullMessageProcessor.registerConsumeMessageHook(consumeMessageHookList);
@@ -902,12 +912,16 @@ public class BrokerController {
             this.filterServerManager.start();
         }
 
+        /**
+         * 如果开启了DLeger
+         */
         if (!messageStoreConfig.isEnableDLegerCommitLog()) {
             startProcessorByHa(messageStoreConfig.getBrokerRole());
             handleSlaveSynchronize(messageStoreConfig.getBrokerRole());
             this.registerBrokerAll(true, false, true);
         }
 
+        // TODO Broker端发送心跳包
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -1152,12 +1166,20 @@ public class BrokerController {
         return accessValidatorMap;
     }
 
+    /**
+     * 该方法的主要作用是处理从节点的元数据同步，即从节点向主节点主动同步 topic 的路由信息、消费进度、延迟队列处理队列、消费组订阅配置等信息
+     * @param role
+     */
     private void handleSlaveSynchronize(BrokerRole role) {
         if (role == BrokerRole.SLAVE) {
+            // 如果上次同步的 future 不为空，则首先先取消
             if (null != slaveSyncFuture) {
                 slaveSyncFuture.cancel(false);
             }
+            // 然后设置 slaveSynchronize 的 master 地址为空。不知大家是否与笔者一样，有一个疑问，从节点的时候，
+            // 如果将 master 地址设置为空，那如何同步元数据，那这个值会在什么时候设置呢？
             this.slaveSynchronize.setMasterAddr(null);
+            // 开启定时同步任务，每 10s 从主节点同步一次元数据
             slaveSyncFuture = this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
                 @Override
                 public void run() {
@@ -1169,6 +1191,7 @@ public class BrokerController {
                     }
                 }
             }, 1000 * 3, 1000 * 10, TimeUnit.MILLISECONDS);
+
         } else {
             //handle the slave synchronise
             if (null != slaveSyncFuture) {
@@ -1247,6 +1270,9 @@ public class BrokerController {
         log.info("Finish to change to master brokerName={}", brokerConfig.getBrokerName());
     }
 
+    /**
+     * 主节点需要开启事务状态回查处理器
+     */
     private void startProcessorByHa(BrokerRole role) {
         if (BrokerRole.SLAVE != role) {
             if (this.transactionalMessageCheckService != null) {

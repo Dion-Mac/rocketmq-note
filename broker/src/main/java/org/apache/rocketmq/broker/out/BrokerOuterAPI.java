@@ -126,26 +126,35 @@ public class BrokerOuterAPI {
         List<String> nameServerAddressList = this.remotingClient.getNameServerAddressList();
         if (nameServerAddressList != null && nameServerAddressList.size() > 0) {
 
+            // TODO 发送心跳包前的准备工作，首先封装请求包头（Header）
             final RegisterBrokerRequestHeader requestHeader = new RegisterBrokerRequestHeader();
+            //TODO broker地址
             requestHeader.setBrokerAddr(brokerAddr);
+            //TODO brokerld, O:Master：，大于0: Slave
             requestHeader.setBrokerId(brokerId);
+            //TODO broker 名称
             requestHeader.setBrokerName(brokerName);
+            //TODO 集群名称
             requestHeader.setClusterName(clusterName);
+            //TODO master地址，初次请求时该值为空，slave向nameServer注册后返回
             requestHeader.setHaServerAddr(haServerAddr);
             requestHeader.setCompressed(compressed);
 
             RegisterBrokerBody requestBody = new RegisterBrokerBody();
             requestBody.setTopicConfigSerializeWrapper(topicConfigWrapper);
+            //TODO 消息过滤服务器列表
             requestBody.setFilterServerList(filterServerList);
             final byte[] body = requestBody.encode(compressed);
             final int bodyCrc32 = UtilAll.crc32(body);
             requestHeader.setBodyCrc32(bodyCrc32);
             final CountDownLatch countDownLatch = new CountDownLatch(nameServerAddressList.size());
+            //TODO 遍历所有的nameServer
             for (final String namesrvAddr : nameServerAddressList) {
                 brokerOuterExecutor.execute(new Runnable() {
                     @Override
                     public void run() {
                         try {
+                            // TODO 向nameServer注册
                             RegisterBrokerResult result = registerBroker(namesrvAddr, oneway, timeoutMills, requestHeader, body);
                             if (result != null) {
                                 registerBrokerResultList.add(result);

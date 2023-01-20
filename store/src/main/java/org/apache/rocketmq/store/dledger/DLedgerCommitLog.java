@@ -61,26 +61,53 @@ import org.apache.rocketmq.store.schedule.ScheduleMessageService;
  * Store all metadata downtime for recovery, data protection reliability
  */
 public class DLedgerCommitLog extends CommitLog {
+
+    /**
+     * 基于 raft 协议实现的集群内的一个节点，用 DLedgerServer 实例表示
+     */
     private final DLedgerServer dLedgerServer;
+
+    /**
+     * DLedger 的配置信息
+     */
     private final DLedgerConfig dLedgerConfig;
+
+    /**
+     * DLedger 基于文件映射的存储实现
+     */
     private final DLedgerMmapFileStore dLedgerFileStore;
+
+    /**
+     * DLedger 所管理的存储文件集合，对比 RocketMQ 中的 MappedFileQueue
+     */
     private final MmapFileList dLedgerFileList;
 
     //The id identifies the broker role, 0 means master, others means slave
     private final int id;
 
     private final MessageSerializer messageSerializer;
+
+    /**
+     * 用于记录 消息追加的时耗(日志追加所持有锁时间
+     */
     private volatile long beginTimeInDledgerLock = 0;
 
+    /**
+     * 记录的旧 commitlog 文件中的最大偏移量，如果访问的偏移量大于它，则访问 dledger 管理的文件
+     */
     //This offset separate the old commitlog from dledger commitlog
     private long dividedCommitlogOffset = -1;
 
+    /**
+     * 是否正在恢复旧的 commitlog 文件
+     */
     private boolean isInrecoveringOldCommitlog = false;
 
     private final StringBuilder msgIdBuilder = new StringBuilder();
 
     public DLedgerCommitLog(final DefaultMessageStore defaultMessageStore) {
         super(defaultMessageStore);
+
         dLedgerConfig = new DLedgerConfig();
         dLedgerConfig.setEnableDiskForceClean(defaultMessageStore.getMessageStoreConfig().isCleanFileForciblyEnable());
         dLedgerConfig.setStoreType(DLedgerConfig.FILE);
@@ -412,6 +439,10 @@ public class DLedgerCommitLog extends CommitLog {
         }
     }
 
+    /**
+     * 从消息追加看 DLedger 整合 RocketMQ 如何实现无缝兼容
+     * 这块是重写了commitlog的消息写入方法
+     */
     @Override
     public CompletableFuture<PutMessageResult> asyncPutMessage(MessageExtBrokerInner msg) {
 
@@ -437,12 +468,22 @@ public class DLedgerCommitLog extends CommitLog {
         long queueOffset;
         try {
             beginTimeInDledgerLock = this.defaultMessageStore.getSystemClock().now();
+
             queueOffset = getQueueOffsetByKey(encodeResult.queueOffsetKey, tranType);
             encodeResult.setQueueOffsetKey(queueOffset, false);
+
+            /**
+             * 关键点一：消息追加时，则不再写入到原先的 commitlog 文件中，而是调用 DLedgerServer 的 handleAppend 进行消息追加，
+             * 该方法会有集群内的 Leader 节点负责消息追加以及消息复制，只有超过集群内的半数节点成功写入消息后，才会返回写入成功。
+             * 如果追加成功，将会返回本次追加成功后的起始偏移量，即 pos 属性，即类似于 rocketmq 中 commitlog 的偏移量，即物理偏移量
+             */
             AppendEntryRequest request = new AppendEntryRequest();
             request.setGroup(dLedgerConfig.getGroup());
             request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
             request.setBody(encodeResult.getData());
+            /**
+             * 这一步就是dledger模式的重点！
+             */
             dledgerFuture = (AppendFuture<AppendEntryResponse>) dLedgerServer.handleAppend(request);
             if (dledgerFuture.getPos() == -1) {
                 return CompletableFuture.completedFuture(new PutMessageResult(PutMessageStatus.OS_PAGECACHE_BUSY, new AppendMessageResult(AppendMessageStatus.UNKNOWN_ERROR)));
@@ -555,6 +596,12 @@ public class DLedgerCommitLog extends CommitLog {
             beginTimeInDledgerLock = this.defaultMessageStore.getSystemClock().now();
             queueOffset = getQueueOffsetByKey(encodeResult.queueOffsetKey, tranType);
             encodeResult.setQueueOffsetKey(queueOffset, true);
+
+            /**
+             * 关键点一：消息追加时，则不再写入到原先的 commitlog 文件中，而是调用 DLedgerServer 的 handleAppend 进行消息追加，
+             * 该方法会有集群内的 Leader 节点负责消息追加以及在消息复制，只有超过集群内的半数节点成功写入消息后，才会返回写入成功。
+             * 如果追加成功，将会返回本次追加成功后的起始偏移量，即 pos 属性，即类似于 rocketmq 中 commitlog 的偏移量，即物理偏移量
+             */
             BatchAppendEntryRequest request = new BatchAppendEntryRequest();
             request.setGroup(dLedgerConfig.getGroup());
             request.setRemoteId(dLedgerServer.getMemberState().getSelfId());
@@ -636,8 +683,12 @@ public class DLedgerCommitLog extends CommitLog {
         });
     }
 
+    /**
+     * 从消息读取看 DLedger 整合 RocketMQ 如何实现无缝兼容
+     */
     @Override
     public SelectMappedBufferResult getMessage(final long offset, final int size) {
+        // 如果查找的物理偏移量小于 dividedCommitlogOffset，则从原先的 commitlog 文件中查找
         if (offset < dividedCommitlogOffset) {
             return super.getMessage(offset, size);
         }

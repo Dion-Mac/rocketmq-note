@@ -286,15 +286,23 @@ public abstract class AbstractSendMessageProcessor extends AsyncNettyRequestProc
         SendMessageRequestHeaderV2 requestHeaderV2 = null;
         SendMessageRequestHeader requestHeader = null;
         switch (request.getCode()) {
+            /**
+             * 发送批量信息的处理逻辑和简短消息的逻辑以及普通消息的最终处理逻辑是一样的
+             *
+             * 对于经过精简的SEND_MESSAGE_V2类型请求会先对精简的信息进行恢复，然后在处理。
+             */
             case RequestCode.SEND_BATCH_MESSAGE:
             case RequestCode.SEND_MESSAGE_V2:
+                //对压缩消息进行解码
                 requestHeaderV2 = decodeSendMessageHeaderV2(request);
             case RequestCode.SEND_MESSAGE:
+                //不是压缩类型消息的处理
                 if (null == requestHeaderV2) {
                     requestHeader =
                         (SendMessageRequestHeader) request
                             .decodeCommandCustomHeader(SendMessageRequestHeader.class);
                 } else {
+                    //压缩类型转换为正常类型
                     requestHeader = SendMessageRequestHeaderV2.createSendMessageRequestHeaderV1(requestHeaderV2);
                 }
             default:

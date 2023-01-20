@@ -23,8 +23,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 public class NameServerAddressUtilsTest {
 
-    private static String endpoint1 = "http://127.0.0.1:9876";
-    private static String endpoint2 = "127.0.0.1:9876";
+    private static String endpoint1 = "http://182.61.6.159:9876";
+    private static String endpoint2 = "182.61.6.159:9876";
     private static String endpoint3
         = "http://MQ_INST_123456789_BXXUzaee.xxx:80";
     private static String endpoint4 = "MQ_INST_123456789_BXXUzaee.xxx:80";
@@ -48,9 +48,9 @@ public class NameServerAddressUtilsTest {
     @Test
     public void testGetNameSrvAddrFromNamesrvEndpoint() {
         assertThat(NameServerAddressUtils.getNameSrvAddrFromNamesrvEndpoint(endpoint1))
-            .isEqualTo("127.0.0.1:9876");
+            .isEqualTo("182.61.6.159:9876");
         assertThat(NameServerAddressUtils.getNameSrvAddrFromNamesrvEndpoint(endpoint2))
-            .isEqualTo("127.0.0.1:9876");
+            .isEqualTo("182.61.6.159:9876");
         assertThat(NameServerAddressUtils.getNameSrvAddrFromNamesrvEndpoint(endpoint3))
             .isEqualTo("MQ_INST_123456789_BXXUzaee.xxx:80");
         assertThat(NameServerAddressUtils.getNameSrvAddrFromNamesrvEndpoint(endpoint4))

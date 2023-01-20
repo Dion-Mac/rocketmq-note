@@ -18,12 +18,42 @@ package org.apache.rocketmq.store;
 
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * MappedFile的父类
+ * 从什么角度去理解这个类的设计呢
+ * 资源的引用
+ */
 public abstract class ReferenceResource {
+    /**
+     * 被引用次数
+     */
     protected final AtomicLong refCount = new AtomicLong(1);
+
+    /**
+     * 是否可用（未被销毁）
+     */
     protected volatile boolean available = true;
+
+    /**
+     * 是否已经被清除
+     */
     protected volatile boolean cleanupOver = false;
+
+    /**
+     * 第一次关闭的时间戳
+     */
     private volatile long firstShutdownTimestamp = 0;
 
+    /**
+     * 笔记
+     * 不是很懂这里的逻辑  为什么这里要这样设计？
+     *
+     * 每当持有资源时，引用数加1，
+     * 如果发现已经不可用就回退，这里用双层检验保证线程安全
+     * 1.isAvailable()
+     * 2.this.refCount.getAndIncrement() > 0
+     * @return
+     */
     public synchronized boolean hold() {
         if (this.isAvailable()) {
             if (this.refCount.getAndIncrement() > 0) {
@@ -40,6 +70,13 @@ public abstract class ReferenceResource {
         return this.available;
     }
 
+    /**
+     * 关闭
+     * 主动触发销毁过程，实际上会调用release函数来进行销毁
+     * 如果这里销毁失败，会在每次尝试销毁时，按照一定的时间间隔，将引用数-1000来强制进行销毁
+     *
+     * @param intervalForcibly  拒绝被销毁的最大存活时间
+     */
     public void shutdown(final long intervalForcibly) {
         if (this.available) {
             this.available = false;
@@ -53,6 +90,9 @@ public abstract class ReferenceResource {
         }
     }
 
+    /**
+     * 释放资源，如果以引用数小于0，则开始销毁
+     */
     public void release() {
         long value = this.refCount.decrementAndGet();
         if (value > 0)

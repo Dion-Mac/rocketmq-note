@@ -39,6 +39,7 @@ import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.security.cert.CertificateException;
@@ -49,6 +50,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.remoting.ChannelEventListener;
@@ -67,14 +69,18 @@ import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 public class NettyRemotingServer extends NettyRemotingAbstract implements RemotingServer {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(RemotingHelper.ROCKETMQ_REMOTING);
     private final ServerBootstrap serverBootstrap;
+
+    //这个其实就是netty中的work线程池，默认用来处理Handler方法的调用
     private final EventLoopGroup eventLoopGroupSelector;
+    // Netty的Boss线程 处理端口的监听
     private final EventLoopGroup eventLoopGroupBoss;
     private final NettyServerConfig nettyServerConfig;
-
+    // 公共线程池，这里用来处理RocketMQ的业务调用，这个有Netty没有什么关系
     private final ExecutorService publicExecutor;
     private final ChannelEventListener channelEventListener;
 
     private final Timer timer = new Timer("ServerHouseKeepingService", true);
+    // 用来处理Handler的线程池
     private DefaultEventExecutorGroup defaultEventExecutorGroup;
 
 
@@ -85,17 +91,23 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
     private static final String FILE_REGION_ENCODER_NAME = "fileRegionEncoder";
 
     // sharable handlers
-    private HandshakeHandler handshakeHandler;
-    private NettyEncoder encoder;
-    private NettyConnectManageHandler connectionManageHandler;
-    private NettyServerHandler serverHandler;
+    /**
+     * 在netty中，使用Handler处理网络的消息，不管是接收网络消息，还是返回网络消息，都会经过Handler的处理方法。在一个网络连接创建channel时，
+     * channel初始化时就会添加相应的Handler。如果每个Handler内都没有共用的对象，那么这些Handler最好标记为共享的，这样可以减少Handler对象的创建
+     *
+     * 下面4个handler都是  都只会创建一个，所有channel共用
+     */
+    private HandshakeHandler handshakeHandler;// tls支持
+    private NettyEncoder encoder;//编码
+    private NettyConnectManageHandler connectionManageHandler;//连接管理
+    private NettyServerHandler serverHandler;// 处理消息写入
 
     public NettyRemotingServer(final NettyServerConfig nettyServerConfig) {
         this(nettyServerConfig, null);
     }
 
     public NettyRemotingServer(final NettyServerConfig nettyServerConfig,
-        final ChannelEventListener channelEventListener) {
+                               final ChannelEventListener channelEventListener) {
         super(nettyServerConfig.getServerOnewaySemaphoreValue(), nettyServerConfig.getServerAsyncSemaphoreValue());
         this.serverBootstrap = new ServerBootstrap();
         this.nettyServerConfig = nettyServerConfig;
@@ -174,65 +186,78 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
         }
     }
 
+    /**
+     * epoll是Linux下多路复用IO接口select/poll的增强版本，它能显著减少程序在大量并发连接中只有少量活跃的情况下的系统CPU利用率
+     * 可配置，代码中居然默认是不启用
+     */
     private boolean useEpoll() {
         return RemotingUtil.isLinuxPlatform()
-            && nettyServerConfig.isUseEpollNativeSelector()
-            && Epoll.isAvailable();
+                && nettyServerConfig.isUseEpollNativeSelector()
+                && Epoll.isAvailable();
     }
 
     @Override
     public void start() {
+        // 为什么处理handler的线程池在这里创建，而boss和work的线程池在构造方法里面创建？
         this.defaultEventExecutorGroup = new DefaultEventExecutorGroup(
-            nettyServerConfig.getServerWorkerThreads(),
-            new ThreadFactory() {
+                nettyServerConfig.getServerWorkerThreads(),
+                new ThreadFactory() {
 
-                private AtomicInteger threadIndex = new AtomicInteger(0);
+                    private AtomicInteger threadIndex = new AtomicInteger(0);
 
-                @Override
-                public Thread newThread(Runnable r) {
-                    return new Thread(r, "NettyServerCodecThread_" + this.threadIndex.incrementAndGet());
-                }
-            });
+                    @Override
+                    public Thread newThread(Runnable r) {
+                        return new Thread(r, "NettyServerCodecThread_" + this.threadIndex.incrementAndGet());
+                    }
+                });
 
         prepareSharableHandlers();
 
+        /**
+         * 通过option方法为通道服务端通道选项  负责boss线程组
+         * 通过chiildOption方法为IO通道设置选项 负责work线程组
+         * 调用管道的addLast添加自定义编码解码器
+         */
         ServerBootstrap childHandler =
-            this.serverBootstrap.group(this.eventLoopGroupBoss, this.eventLoopGroupSelector)
-                .channel(useEpoll() ? EpollServerSocketChannel.class : NioServerSocketChannel.class)
-                .option(ChannelOption.SO_BACKLOG, nettyServerConfig.getServerSocketBacklog())
-                .option(ChannelOption.SO_REUSEADDR, true)
-                .option(ChannelOption.SO_KEEPALIVE, false)
-                .childOption(ChannelOption.TCP_NODELAY, true)
-                .localAddress(new InetSocketAddress(this.nettyServerConfig.getListenPort()))
-                .childHandler(new ChannelInitializer<SocketChannel>() {
-                    @Override
-                    public void initChannel(SocketChannel ch) throws Exception {
-                        ch.pipeline()
-                            .addLast(defaultEventExecutorGroup, HANDSHAKE_HANDLER_NAME, handshakeHandler)
-                            .addLast(defaultEventExecutorGroup,
-                                encoder,
-                                new NettyDecoder(),
-                                new IdleStateHandler(0, 0, nettyServerConfig.getServerChannelMaxIdleTimeSeconds()),
-                                connectionManageHandler,
-                                serverHandler
-                            );
-                    }
-                });
+                this.serverBootstrap.group(this.eventLoopGroupBoss, this.eventLoopGroupSelector)
+                        .channel(useEpoll() ? EpollServerSocketChannel.class : NioServerSocketChannel.class) // 根据环境和配置，尽量选择性能高的channel
+                        .option(ChannelOption.SO_BACKLOG, nettyServerConfig.getServerSocketBacklog())// 服务端接受客户端连接的处理队列，在TCP三次握手协议中，服务端接收到客户端的SYN包后，会向客户端发送SYN+ACK包，同时会将连接放入到 backlog 队列中，等待客户端ACK包。在服务端没有接收到客户端的ACK包之前，连接会暂存 backlog 队列
+                        .option(ChannelOption.SO_REUSEADDR, true) // 端口复用(直接复用TIME_WAIT状态的socket)
+                        .option(ChannelOption.SO_KEEPALIVE, false)// 居然设置为false？
+                        .childOption(ChannelOption.TCP_NODELAY, true)// 不使用tcp delay延迟 即时性比较好
+                        .localAddress(new InetSocketAddress(this.nettyServerConfig.getListenPort()))
+                        .childHandler(new ChannelInitializer<SocketChannel>() {
+                            @Override
+                            public void initChannel(SocketChannel ch) throws Exception {
+                                ch.pipeline()
+                                        .addLast(defaultEventExecutorGroup, HANDSHAKE_HANDLER_NAME, handshakeHandler)    // ！！！ 这里是真正进行业务处理的handler
+                                        .addLast(defaultEventExecutorGroup,
+                                                encoder,
+                                                new NettyDecoder(),
+                                                new IdleStateHandler(0, 0, nettyServerConfig.getServerChannelMaxIdleTimeSeconds()),
+                                                connectionManageHandler,
+                                                serverHandler             // 这个添加顺序有没有问题呢
+                                        );
+                            }
+                        });
+        // 发送缓存区 默认是0
         if (nettyServerConfig.getServerSocketSndBufSize() > 0) {
             log.info("server set SO_SNDBUF to {}", nettyServerConfig.getServerSocketSndBufSize());
             childHandler.childOption(ChannelOption.SO_SNDBUF, nettyServerConfig.getServerSocketSndBufSize());
         }
+        // 接受缓存区 默认是0
         if (nettyServerConfig.getServerSocketRcvBufSize() > 0) {
             log.info("server set SO_RCVBUF to {}", nettyServerConfig.getServerSocketRcvBufSize());
             childHandler.childOption(ChannelOption.SO_RCVBUF, nettyServerConfig.getServerSocketRcvBufSize());
         }
+
         if (nettyServerConfig.getWriteBufferLowWaterMark() > 0 && nettyServerConfig.getWriteBufferHighWaterMark() > 0) {
             log.info("server set netty WRITE_BUFFER_WATER_MARK to {},{}",
                     nettyServerConfig.getWriteBufferLowWaterMark(), nettyServerConfig.getWriteBufferHighWaterMark());
             childHandler.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(
                     nettyServerConfig.getWriteBufferLowWaterMark(), nettyServerConfig.getWriteBufferHighWaterMark()));
         }
-
+        // 使用Netty的内存池可以减少对象的创建和内存分配，进而减少gc的量。在RocketMQ的服务中，默认是开启使用netty的内存池的
         if (nettyServerConfig.isServerPooledByteBufAllocatorEnable()) {
             childHandler.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
         }
@@ -249,6 +274,9 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
             this.nettyEventExecutor.start();
         }
 
+        /**
+         * 周期性执行，定时器写法，scanResponseTable()是做了什么事情
+         */
         this.timer.scheduleAtFixedRate(new TimerTask() {
 
             @Override
@@ -302,12 +330,15 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
 
     @Override
     public void registerProcessor(int requestCode, NettyRequestProcessor processor, ExecutorService executor) {
+        //处理请求的线程池
         ExecutorService executorThis = executor;
         if (null == executor) {
             executorThis = this.publicExecutor;
         }
 
+        //将请求处理类的对象（比如SendMessageProcessor）和对应的请求code放到缓存中
         Pair<NettyRequestProcessor, ExecutorService> pair = new Pair<NettyRequestProcessor, ExecutorService>(processor, executorThis);
+        //processorTable位于NettyRemotingServer的父类NettyRemotingAbstract中
         this.processorTable.put(requestCode, pair);
     }
 
@@ -427,7 +458,7 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
 
     @ChannelHandler.Sharable
     class NettyServerHandler extends SimpleChannelInboundHandler<RemotingCommand> {
-
+        //调用父类的实现，其实是一个模板模式。什么是模板模式？
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, RemotingCommand msg) throws Exception {
             processMessageReceived(ctx, msg);

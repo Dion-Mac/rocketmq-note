@@ -54,7 +54,9 @@ public class BrokerStartup {
     public static InternalLogger log;
 
     public static void main(String[] args) {
+        long start = System.currentTimeMillis();
         start(createBrokerController(args));
+        System.out.println(System.currentTimeMillis() - start);
     }
 
     public static BrokerController start(BrokerController controller) {

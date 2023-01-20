@@ -1115,7 +1115,7 @@ public class MQClientAPIImpl {
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.CONSUMER_SEND_MSG_BACK, requestHeader);
 
         requestHeader.setGroup(consumerGroup);
-        requestHeader.setOriginTopic(msg.getTopic());
+        requestHeader.setOriginTopic(msg.getTopic());// 把消息重新发回去，不用把消息体弄回去？其实这样是对的，不然数据不就重复存储了吗？
         requestHeader.setOffset(msg.getCommitLogOffset());
         requestHeader.setDelayLevel(delayLevel);
         requestHeader.setOriginMsgId(msg.getMsgId());

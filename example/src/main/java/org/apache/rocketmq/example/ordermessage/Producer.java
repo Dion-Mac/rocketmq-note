@@ -32,9 +32,9 @@ import java.util.List;
 public class Producer {
     public static void main(String[] args) throws UnsupportedEncodingException {
         try {
-            DefaultMQProducer producer = new DefaultMQProducer("please_rename_unique_group_name");
+            DefaultMQProducer producer = new DefaultMQProducer("OrderMessageProducer");
+            producer.setNamesrvAddr("182.61.6.159:9876");
             producer.start();
-
             String[] tags = new String[] {"TagA", "TagB", "TagC", "TagD", "TagE"};
             for (int i = 0; i < 100; i++) {
                 int orderId = i % 10;

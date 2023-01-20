@@ -206,6 +206,9 @@ public class HAConnection {
         private final SocketChannel socketChannel;
 
         private final int headerSize = 8 + 4;
+        /**
+         * 还有12个字节长度，够用？  只是用于头部   long类型的offset  int类型的长度
+         */
         private final ByteBuffer byteBufferHeader = ByteBuffer.allocate(headerSize);
         private long nextTransferFromWhere = -1;
         private SelectMappedBufferResult selectMappedBufferResult;
@@ -227,11 +230,13 @@ public class HAConnection {
                 try {
                     this.selector.select(1000);
 
+                    // 还没有收到salve的拉取请求，放弃本次操作
                     if (-1 == HAConnection.this.slaveRequestOffset) {
                         Thread.sleep(10);
                         continue;
                     }
 
+                    // 初次数据传输 如果slaveRequestOffset为0,计算当前最新commitlog的初始offset位置 为什么这么做？不然就从从服务器发出的slaveRequestOffset开始传输
                     if (-1 == this.nextTransferFromWhere) {
                         if (0 == HAConnection.this.slaveRequestOffset) {
                             long masterOffset = HAConnection.this.haService.getDefaultMessageStore().getCommitLog().getMaxOffset();
@@ -253,11 +258,13 @@ public class HAConnection {
                             + "], and slave request " + HAConnection.this.slaveRequestOffset);
                     }
 
+                    // 判断上次写时间是否已经将信息全部写入客户端
                     if (this.lastWriteOver) {
 
                         long interval =
                             HAConnection.this.haService.getDefaultMessageStore().getSystemClock().now() - this.lastWriteTimestamp;
 
+                        // 超过心跳时间间隔（默认5秒），发送一个心跳包
                         if (interval > HAConnection.this.haService.getDefaultMessageStore().getMessageStoreConfig()
                             .getHaSendHeartbeatInterval()) {
 
@@ -265,7 +272,7 @@ public class HAConnection {
                             this.byteBufferHeader.position(0);
                             this.byteBufferHeader.limit(headerSize);
                             this.byteBufferHeader.putLong(this.nextTransferFromWhere);
-                            this.byteBufferHeader.putInt(0);
+                            this.byteBufferHeader.putInt(0);// 因为是心跳包，所以这里的长度是0
                             this.byteBufferHeader.flip();
 
                             this.lastWriteOver = this.transferData();
@@ -281,7 +288,8 @@ public class HAConnection {
                     SelectMappedBufferResult selectResult =
                         HAConnection.this.haService.getDefaultMessageStore().getCommitLogData(this.nextTransferFromWhere);
                     if (selectResult != null) {
-                        int size = selectResult.getSize();
+                        int size = selectResult.getSize();// 目前最大可读数据
+                        // 默认一次最多传输32K的数据
                         if (size > HAConnection.this.haService.getDefaultMessageStore().getMessageStoreConfig().getHaTransferBatchSize()) {
                             size = HAConnection.this.haService.getDefaultMessageStore().getMessageStoreConfig().getHaTransferBatchSize();
                         }
@@ -289,7 +297,7 @@ public class HAConnection {
                         long thisOffset = this.nextTransferFromWhere;
                         this.nextTransferFromWhere += size;
 
-                        selectResult.getByteBuffer().limit(size);
+                        selectResult.getByteBuffer().limit(size);// 这里限制了一次可读的数据大小，很重要
                         this.selectMappedBufferResult = selectResult;
 
                         // Build Header
@@ -354,7 +362,7 @@ public class HAConnection {
                     throw new Exception("ha master write header error < 0");
                 }
             }
-
+            // 如果只是心跳包，这一步就会返回了
             if (null == this.selectMappedBufferResult) {
                 return !this.byteBufferHeader.hasRemaining();
             }
@@ -364,7 +372,7 @@ public class HAConnection {
             // Write Body
             if (!this.byteBufferHeader.hasRemaining()) {
                 while (this.selectMappedBufferResult.getByteBuffer().hasRemaining()) {
-                    int writeSize = this.socketChannel.write(this.selectMappedBufferResult.getByteBuffer());
+                    int writeSize = this.socketChannel.write(this.selectMappedBufferResult.getByteBuffer());// 这个数据不是很大吗？
                     if (writeSize > 0) {
                         writeSizeZeroTimes = 0;
                         this.lastWriteTimestamp = HAConnection.this.haService.getDefaultMessageStore().getSystemClock().now();

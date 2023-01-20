@@ -24,7 +24,10 @@ import java.util.Map;
 
 public class Message implements Serializable {
     private static final long serialVersionUID = 8445773977080406428L;
-
+    //TODO 基础属性
+    // 主题
+    // flag(RocketMQ不做处理），供应用程序使用
+    // 拓展属性
     private String topic;
     private int flag;
     private Map<String, String> properties;
@@ -38,6 +41,10 @@ public class Message implements Serializable {
         this(topic, "", "", 0, body, true);
     }
 
+    //TODO message的拓展属性主要包含这几个：
+    // 消息TAG, 用于消息过滤
+    // 消息的keys是message索引键，多个用空格隔开，rocketmq可以根据这些key快速检索到消息
+    // waitStoreMsgOK 消息发送时是否等消息存储完成之后再返回
     public Message(String topic, String tags, String keys, int flag, byte[] body, boolean waitStoreMsgOK) {
         this.topic = topic;
         this.flag = flag;
@@ -147,6 +154,7 @@ public class Message implements Serializable {
         return 0;
     }
 
+    //TODO 消息延迟级别，用于定时消息或消息重试
     public void setDelayTimeLevel(int level) {
         this.putProperty(MessageConst.PROPERTY_DELAY_TIME_LEVEL, String.valueOf(level));
     }

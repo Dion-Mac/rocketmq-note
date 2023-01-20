@@ -26,6 +26,7 @@ public class SimpleBatchProducer {
 
     public static void main(String[] args) throws Exception {
         DefaultMQProducer producer = new DefaultMQProducer("BatchProducerGroupName");
+        producer.setNamesrvAddr("182.61.6.159:9876");
         producer.start();
 
         //If you just send messages of no more than 1MiB at a time, it is easy to use batch
@@ -37,5 +38,6 @@ public class SimpleBatchProducer {
         messages.add(new Message(topic, "Tag", "OrderID003", "Hello world 2".getBytes()));
 
         producer.send(messages);
+        producer.shutdown();
     }
 }

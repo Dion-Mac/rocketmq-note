@@ -73,30 +73,61 @@ import org.apache.rocketmq.store.stats.BrokerStatsManager;
 public class DefaultMessageStore implements MessageStore {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
+    /**
+     * 消息存储配置属性
+     */
     private final MessageStoreConfig messageStoreConfig;
     // CommitLog
     private final CommitLog commitLog;
 
+    /**
+     * 消息队列存储缓存表，按消息主题分组
+     */
     private final ConcurrentMap<String/* topic */, ConcurrentMap<Integer/* queueId */, ConsumeQueue>> consumeQueueTable;
 
     private final FlushConsumeQueueService flushConsumeQueueService;
 
     private final CleanCommitLogService cleanCommitLogService;
 
+    /**
+     * 清除consumeQueue文件服务
+     */
     private final CleanConsumeQueueService cleanConsumeQueueService;
 
+    /**
+     * 索引文件实现类
+     */
     private final IndexService indexService;
 
+    /**
+     * mappedFile 分配服务
+     */
     private final AllocateMappedFileService allocateMappedFileService;
 
+    /**
+     * commitLog消息分发，根据commitLog文件构造ConsumeQueue，indexFile文件
+     */
     private final ReputMessageService reputMessageService;
 
+    /**
+     * 存储HA机制
+     */
     private final HAService haService;
 
+    /**
+     *
+     */
     private final ScheduleMessageService scheduleMessageService;
 
+    /**
+     * 存储状态服务
+     * 记录消息写入耗时，失败次数
+     */
     private final StoreStatsService storeStatsService;
 
+    /**
+     * 消息写入堆外缓存池
+     */
     private final TransientStorePool transientStorePool;
 
     private final RunningFlags runningFlags = new RunningFlags();
@@ -105,17 +136,31 @@ public class DefaultMessageStore implements MessageStore {
     private final ScheduledExecutorService scheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor(new ThreadFactoryImpl("StoreScheduledThread"));
     private final BrokerStatsManager brokerStatsManager;
+
+    /**
+     * 消息拉取长轮询模式消息达到监听器
+     */
     private final MessageArrivingListener messageArrivingListener;
+
+    /**
+     * broker配置属性
+     */
     private final BrokerConfig brokerConfig;
 
     private volatile boolean shutdown = true;
 
+    /**
+     * 文件刷盘检测点
+     */
     private StoreCheckpoint storeCheckpoint;
 
     private AtomicLong printTimes = new AtomicLong(0);
 
     private final AtomicInteger lmqConsumeQueueNum = new AtomicInteger(0);
 
+    /**
+     * 文件转发请求
+     */
     private final LinkedList<CommitLogDispatcher> dispatcherList;
 
     private RandomAccessFile lockFile;
@@ -134,6 +179,10 @@ public class DefaultMessageStore implements MessageStore {
         this.messageStoreConfig = messageStoreConfig;
         this.brokerStatsManager = brokerStatsManager;
         this.allocateMappedFileService = new AllocateMappedFileService(this);
+        /**
+         * 如果启用了Dledger，commitlog的实现不同。关键点
+         * DLedgerCommitLog是CommitLog的子类
+          */
         if (messageStoreConfig.isEnableDLegerCommitLog()) {
             this.commitLog = new DLedgerCommitLog(this);
         } else {
@@ -157,6 +206,9 @@ public class DefaultMessageStore implements MessageStore {
 
         this.transientStorePool = new TransientStorePool(messageStoreConfig);
 
+        /**
+         * 初始化transientStorePool
+         */
         if (messageStoreConfig.isTransientStorePoolEnable()) {
             this.transientStorePool.init();
         }
@@ -445,16 +497,24 @@ public class DefaultMessageStore implements MessageStore {
 
     @Override
     public CompletableFuture<PutMessageResult> asyncPutMessage(MessageExtBrokerInner msg) {
+        /**
+         * 检查存储状态
+         * 主要对broker是否可以写入消息进行检查，包括是否是关闭状态，是否是slave角色等
+          */
         PutMessageStatus checkStoreStatus = this.checkStoreStatus();
         if (checkStoreStatus != PutMessageStatus.PUT_OK) {
             return CompletableFuture.completedFuture(new PutMessageResult(checkStoreStatus, null));
         }
-
+        /**
+         * 检查消息是否合法，看是否超长等
+          */
         PutMessageStatus msgCheckStatus = this.checkMessage(msg);
         if (msgCheckStatus == PutMessageStatus.MESSAGE_ILLEGAL) {
             return CompletableFuture.completedFuture(new PutMessageResult(msgCheckStatus, null));
         }
-
+        /**
+         * 进行一系列校验
+         */
         PutMessageStatus lmqMsgCheckStatus = this.checkLmqMessage(msg);
         if (msgCheckStatus == PutMessageStatus.LMQ_CONSUME_QUEUE_NUM_EXCEEDED) {
             return CompletableFuture.completedFuture(new PutMessageResult(lmqMsgCheckStatus, null));
@@ -462,15 +522,22 @@ public class DefaultMessageStore implements MessageStore {
 
 
         long beginTime = this.getSystemClock().now();
+        /**
+         * 调用commitLog的asyncPutMessage方法写入消息
+         */
         CompletableFuture<PutMessageResult> putResultFuture = this.commitLog.asyncPutMessage(msg);
 
+        /**
+         * 笔记  这里应该是异步记录执行耗时与结果
+         */
         putResultFuture.thenAccept((result) -> {
             long elapsedTime = this.getSystemClock().now() - beginTime;
             if (elapsedTime > 500) {
                 log.warn("putMessage not in lock elapsed time(ms)={}, bodyLength={}", elapsedTime, msg.getBody().length);
             }
+            // 记录存储花费时间  可以通过日志查看rocketmq的存储耗时情况，应该就是这个类发挥的作用
             this.storeStatsService.setPutMessageEntireTimeMax(elapsedTime);
-
+            // 记录失败次数
             if (null == result || !result.isOk()) {
                 this.storeStatsService.getPutMessageFailedTimes().add(1);
             }
@@ -556,6 +623,9 @@ public class DefaultMessageStore implements MessageStore {
         return commitLog;
     }
 
+    /**
+     * 消息拉取的执行方法
+     */
     public GetMessageResult getMessage(final String group, final String topic, final int queueId, final long offset,
         final int maxMsgNums,
         final MessageFilter messageFilter) {
@@ -583,9 +653,9 @@ public class DefaultMessageStore implements MessageStore {
 
         // lazy init when find msg.
         GetMessageResult getResult = null;
-
+        // 当前所有commitlog中最大的offset
         final long maxOffsetPy = this.commitLog.getMaxOffset();
-
+        // 查询对应消费队列
         ConsumeQueue consumeQueue = findConsumeQueue(topic, queueId);
         if (consumeQueue != null) {
             minOffset = consumeQueue.getMinOffsetInQueue();
@@ -608,6 +678,7 @@ public class DefaultMessageStore implements MessageStore {
                     nextBeginOffset = nextOffsetCorrection(offset, maxOffset);
                 }
             } else {
+                // 获取到可读的ByteBuffer
                 SelectMappedBufferResult bufferConsumeQueue = consumeQueue.getIndexBuffer(offset);
                 if (bufferConsumeQueue != null) {
                     try {
@@ -623,10 +694,11 @@ public class DefaultMessageStore implements MessageStore {
                         getResult = new GetMessageResult(maxMsgNums);
 
                         ConsumeQueueExt.CqExtUnit cqExtUnit = new ConsumeQueueExt.CqExtUnit();
+                        // for循环读取
                         for (; i < bufferConsumeQueue.getSize() && i < maxFilterMessageCount; i += ConsumeQueue.CQ_STORE_UNIT_SIZE) {
-                            long offsetPy = bufferConsumeQueue.getByteBuffer().getLong();
-                            int sizePy = bufferConsumeQueue.getByteBuffer().getInt();
-                            long tagsCode = bufferConsumeQueue.getByteBuffer().getLong();
+                            long offsetPy = bufferConsumeQueue.getByteBuffer().getLong();// commitlog offset
+                            int sizePy = bufferConsumeQueue.getByteBuffer().getInt();// size
+                            long tagsCode = bufferConsumeQueue.getByteBuffer().getLong();// tag hashcode
 
                             maxPhyOffsetPulling = offsetPy;
 
@@ -663,7 +735,7 @@ public class DefaultMessageStore implements MessageStore {
 
                                 continue;
                             }
-
+                            // 一次就查找一条 根据commitLog的offset和size读取
                             SelectMappedBufferResult selectResult = this.commitLog.getMessage(offsetPy, sizePy);
                             if (null == selectResult) {
                                 if (getResult.getBufferTotalSize() == 0) {
@@ -683,7 +755,7 @@ public class DefaultMessageStore implements MessageStore {
                                 selectResult.release();
                                 continue;
                             }
-
+                            // 记录消费消息数量
                             this.storeStatsService.getGetMessageTransferedMsgCount().add(1);
                             getResult.addMessage(selectResult);
                             status = GetMessageStatus.FOUND;

@@ -322,7 +322,7 @@ public class MixAll {
                 try {
                     String tmp = mn.substring(4);
                     String first = mn.substring(3, 4);
-
+                    //取出set后面的方法名，key是小写字母开头
                     String key = first.toLowerCase() + tmp;
                     String property = p.getProperty(key);
                     if (property != null) {

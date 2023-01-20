@@ -26,8 +26,8 @@ public class SqlFilterProducer {
 
     public static void main(String[] args) throws Exception {
 
-        DefaultMQProducer producer = new DefaultMQProducer("please_rename_unique_group_name");
-
+        DefaultMQProducer producer = new DefaultMQProducer("SqlFilterProducer");
+        producer.setNamesrvAddr("182.61.6.159:9876");
         producer.start();
 
         String[] tags = new String[] {"TagA", "TagB", "TagC"};
@@ -43,6 +43,6 @@ public class SqlFilterProducer {
             System.out.printf("%s%n", sendResult);
         }
 
-        producer.shutdown();
+//        producer.shutdown();
     }
 }

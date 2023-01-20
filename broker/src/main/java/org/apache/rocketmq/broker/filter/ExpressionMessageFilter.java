@@ -78,6 +78,9 @@ public class ExpressionMessageFilter implements MessageFilter {
                 return true;
             }
 
+            /**
+             * 这里难道不是bug？为什么设计用8位，代码里面实际用int呢？
+             */
             return subscriptionData.getCodeSet().contains(tagsCode.intValue());
         } else {
             // no expression or no bloom
